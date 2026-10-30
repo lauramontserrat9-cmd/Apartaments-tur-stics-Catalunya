@@ -1,0 +1,558 @@
+
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8"/>
+        <title>kepler.gl embedded map</title>
+
+        <!--Uber Font-->
+        <link rel="stylesheet" href="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/uber-fonts/4.0.0/superfine.css">
+
+        <!--Kepler css-->
+        <link href="https://unpkg.com/kepler.gl@3.3.0-alpha.19/umd/keplergl.min.css" rel="stylesheet">
+
+        <!--MapBox css-->
+        <link href="https://api.tiles.mapbox.com/mapbox-gl-js/v1.1.1/mapbox-gl.css" rel="stylesheet">
+        <link href="https://unpkg.com/maplibre-gl@^3/dist/maplibre-gl.css" rel="stylesheet">
+
+        <!-— facebook open graph tags -->
+        <meta property="og:url" content="http://kepler.gl/" />
+        <meta property="og:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool" />
+        <meta property="og:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets." />
+        <meta property="og:site_name" content="kepler.gl" />
+        <meta property="og:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="800" />
+        <meta property="og:image:height" content="800" />
+
+        <!-— twitter card tags -->
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:site" content="@openjsf">
+        <meta name="twitter:creator" content="@openjsf">
+        <meta name="twitter:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool">
+        <meta name="twitter:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets.">
+        <meta name="twitter:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+
+        <!--
+          Load React/Redux and the other UMD peer dependencies as ES modules.
+          React >= 19 no longer ships UMD builds, so we pull everything from an
+          ESM CDN (esm.sh) and re-expose them on window as the globals that the
+          kepler.gl UMD bundle (and the inline scripts below) expect.
+
+          IMPORTANT: this file must keep working as a standalone file, i.e. opened
+          directly from disk via the file:// protocol. Native ES module scripts
+          are always fetched with CORS semantics and a file:// document has an
+          opaque (null) origin, so the browser refuses to load native modules or
+          import maps locally. To keep the standalone-file behaviour we run
+          es-module-shims in "shim mode" (importmap-shim / module-shim tags): it
+          is a classic script (loads fine from file://) that resolves the import
+          map and executes the modules as blob: URLs, sidestepping that
+          restriction. The import map pins a single React instance and uses
+          external= so react-redux / styled-components reuse it (otherwise React
+          hooks break).
+        -->
+        <script>
+          // Trigger es-module-shims "shim mode" so it always parses the
+          // importmap-shim / module-shim tags below instead of deferring to the
+          // native loader (which fails under file://).
+          window.esmsInitOptions = {shimMode: true};
+        </script>
+        <script>
+          // Replace the loading overlay with an error message.
+          // Safe to call at any time — once React has mounted and removed
+          // #kepler-load-screen this becomes a no-op.
+          window._keplerShowLoadError = function(msg) {
+            var loadScreen = document.getElementById('kepler-load-screen');
+            if (!loadScreen) return;
+            var spinner = loadScreen.querySelector('.kepler-spinner');
+            var label = loadScreen.querySelector('.kepler-load-label');
+            if (spinner) spinner.style.display = 'none';
+            if (label) label.style.display = 'none';
+            var errEl = document.createElement('div');
+            errEl.className = 'kepler-load-error';
+            errEl.textContent = msg || 'Failed to load the map. Check your internet connection and reload the page.';
+            loadScreen.appendChild(errEl);
+          };
+          // Catch unhandled promise rejections (e.g. ES module imports failing
+          // inside the module-shim script before loadScript is ever called).
+          window.addEventListener('unhandledrejection', function(event) {
+            console.error('kepler.gl: unhandled rejection during map load', event.reason);
+            window._keplerShowLoadError('Failed to load the map. Check your internet connection and reload the page.');
+          });
+        </script>
+        <script src="https://unpkg.com/es-module-shims@2.8.1/dist/es-module-shims.js" crossorigin="anonymous"></script>
+        
+        <script type="importmap-shim">
+          {
+            "imports": {
+              "react": "https://esm.sh/react@19.1.0",
+              "react/jsx-runtime": "https://esm.sh/react@19.1.0/jsx-runtime",
+              "react-dom": "https://esm.sh/react-dom@19.1.0?external=react",
+              "react-dom/client": "https://esm.sh/react-dom@19.1.0/client?external=react",
+              "redux": "https://esm.sh/redux@5.0.1",
+              "react-redux": "https://esm.sh/react-redux@9.3.0?external=react,react-dom,redux",
+              "styled-components": "https://esm.sh/styled-components@6.1.19?external=react,react-dom"
+            }
+          }
+        </script>
+
+        <!--
+          Expose the ES modules as globals for the UMD kepler.gl bundle, then load
+          the kepler.gl UMD script and the app bootstrap script only after those
+          globals are available. The kepler.gl UMD bundle is a classic script
+          (which loads fine from file://), so it is injected dynamically here once
+          the globals are in place to guarantee the correct ordering.
+        -->
+        <script type="module-shim">
+          import * as React from 'react';
+          import * as ReactDOM from 'react-dom';
+          import * as ReactDOMClient from 'react-dom/client';
+          import * as Redux from 'redux';
+          import * as ReactRedux from 'react-redux';
+          import * as StyledComponents from 'styled-components';
+
+          // esm.sh namespaces expose the module's default export under .default.
+          // Normalize so the globals match the shape the React 18 UMD builds had:
+          // - React / Redux / ReactRedux keep their full namespace (named exports).
+          // - ReactDOM merges the classic + client entry so both createPortal and
+          //   createRoot are available (createRoot moved to react-dom/client in v19).
+          // - styled-components' global must be the callable default (styled) with
+          //   its named exports (ThemeProvider, withTheme, css, keyframes, ...)
+          //   attached, since the kepler.gl bundle relies on both.
+          window.React = React.default || React;
+          window.ReactDOM = Object.assign({}, ReactDOM.default || ReactDOM, ReactDOMClient);
+          window.Redux = Redux.default || Redux;
+          window.ReactRedux = ReactRedux.default || ReactRedux;
+          window.styled = Object.assign(StyledComponents.default, StyledComponents);
+
+          function loadScript(src) {
+            return new Promise(function(resolve, reject) {
+              var script = document.createElement('script');
+              script.src = src;
+              script.crossOrigin = 'anonymous';
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+          }
+
+          // Load the kepler.gl UMD bundle after the globals are in place, then run
+          // the app bootstrap scripts (marked as type="text/kepler-bootstrap").
+          loadScript("https://unpkg.com/kepler.gl@3.3.0-alpha.19/umd/keplergl.min.js")
+            .then(function() {
+              var bootstraps = document.querySelectorAll('script[type="text/kepler-bootstrap"]');
+              bootstraps.forEach(function(node) {
+                var script = document.createElement('script');
+                script.text = node.textContent;
+                document.body.appendChild(script);
+              });
+            })
+            .catch(function(error) {
+              console.error('kepler.gl: failed to load UMD bundle', error);
+              window._keplerShowLoadError('Failed to load the map bundle. Check your internet connection and reload the page.');
+            });
+        </script>
+        <style type="text/css">
+          body {margin: 0; padding: 0; overflow: hidden;}
+          #kepler-load-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #29323c;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 9999;
+            font-family: ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif;
+            color: #a0a7b4;
+          }
+          #kepler-load-screen .kepler-spinner {
+            width: 48px; height: 48px;
+            border: 4px solid rgba(255,255,255,0.08);
+            border-top-color: #1fbad6;
+            border-radius: 50%;
+            animation: kepler-spin 0.8s linear infinite;
+          }
+          #kepler-load-screen .kepler-load-label {
+            font-size: 13px;
+            letter-spacing: 0.5px;
+          }
+          #kepler-load-screen .kepler-load-error {
+            font-size: 13px;
+            color: #f05e45;
+            max-width: 360px;
+            text-align: center;
+            line-height: 1.5;
+          }
+          @keyframes kepler-spin { to { transform: rotate(360deg); } }
+        </style>
+
+        <!--MapBox token-->
+        <!--
+          SECURITY NOTE: Your Mapbox access token is embedded below in plain text.
+          Anyone with access to this HTML file can see and use this token.
+          Consider using a scoped token with URL restrictions to limit misuse.
+          See: https://docs.mapbox.com/accounts/guides/tokens/#url-restrictions
+        -->
+        <script>
+          /**
+           * Provide your MapBox Token
+           **/
+          window.MAPBOX_TOKEN = "pk.eyJ1IjoidWNmLW1hcGJveCIsImEiOiJjbDBiYzlveHgwdnF0M2NtZzUzZWZuNWZ4In0.l9J8ptz3MKwaU9I4PtCcig";
+          window.WARNING_MESSAGE = 'No Mapbox token provided. Mapbox basemaps will not be available. To enable them, edit this file and set MAPBOX_TOKEN to your Mapbox access key.';
+        </script>
+      </head>
+      <body>
+        <!-- We will put our React component inside this div. -->
+        <div id="app">
+          <div id="kepler-load-screen">
+            <div class="kepler-spinner"></div>
+            <div class="kepler-load-label">Loading map…</div>
+          </div>
+        </div>
+
+        <!--
+          Load our React component. This script is not executed inline: it is run
+          by the module shim in <head> once the kepler.gl UMD bundle (and its
+          global peer dependencies) have finished loading.
+        -->
+        <script type="text/kepler-bootstrap">
+          /* Validate Mapbox Token */
+          if ((MAPBOX_TOKEN || '') === '' || MAPBOX_TOKEN === 'PROVIDE_MAPBOX_TOKEN') {
+            console.warn('[kepler.gl]', WARNING_MESSAGE);
+          }
+
+          const branding = {"appName":"kepler.gl","appWebsite":"http://kepler.gl/","appIcon":null,"appNameColor":"#1FBAD6"};
+
+          /** STORE **/
+          // Pre-seed styleType so the correct basemap fetch starts on the very
+          // first render, avoiding a flash of the default dark basemap.
+          // options.config has the versioned envelope shape: { version, config: { mapStyle, ... } }
+          const savedStyleType = "dark";
+
+          const reducers = (function createReducers(redux, keplerGl, styleType) {
+            return redux.combineReducers({
+              // mount keplerGl reducer
+              keplerGl: keplerGl.keplerGlReducer.initialState({
+                uiState: {
+                  readOnly: true,
+                  currentModal: null,
+                  exportMap: Object.assign({}, keplerGl.INITIAL_UI_STATE.exportMap, branding)
+                },
+                ...(styleType ? {mapStyle: {styleType}} : {})
+              })
+            });
+          }(Redux, KeplerGl, savedStyleType));
+
+          const middleWares = (function createMiddlewares(keplerGl) {
+            return keplerGl.enhanceReduxMiddleware([
+              // Add other middlewares here
+            ]);
+          }(KeplerGl));
+
+          const enhancers = (function craeteEnhancers(redux, middles) {
+            return redux.applyMiddleware(...middles);
+          }(Redux, middleWares));
+
+          const store = (function createStore(redux, enhancers) {
+            return redux.createStore(
+              reducers,
+              {},
+              redux.compose(enhancers)
+            );
+          }(Redux, enhancers));
+          /** END STORE **/
+
+          /** COMPONENTS **/
+          var BrandLogo = (function createBrandLogo(react, branding) {
+            return function BrandLogo(props) {
+              var fixed = Boolean(props && props.fixed);
+              var icon = branding.appIcon
+                ? react.createElement("img", {
+                    src: branding.appIcon,
+                    alt: "",
+                    "aria-hidden": true,
+                    style: {width: "22px", height: "15px", objectFit: "contain"}
+                  })
+                : react.createElement(
+                    "svg",
+                    {width: "22px", height: "15px", viewBox: "0 0 22 15", "aria-hidden": true},
+                    react.createElement(
+                      "g",
+                      {transform: "translate(11, -3) rotate(45.000000)"},
+                      react.createElement("rect", {fill: "#535C6C", x: "0", y: "5", width: "10", height: "10"}),
+                      react.createElement("rect", {fill: "#1FBAD6", x: "5", y: "0", width: "10", height: "10"})
+                    )
+                  );
+
+              return react.createElement(
+                "div",
+                {
+                  className: fixed ? "logo-container" : "side-panel-logo",
+                  style: fixed
+                    ? {position: "fixed", zIndex: 10000, padding: "4px", display: "flex", alignItems: "center"}
+                    : {display: "flex", alignItems: "flex-start"}
+                },
+                react.createElement(
+                  "div",
+                  {style: {marginTop: fixed ? 0 : "3px"}},
+                  icon
+                ),
+                react.createElement(
+                  "div",
+                  {className: "logo__title", style: {marginLeft: "6px"}},
+                  react.createElement(
+                    "a",
+                    {
+                      className: "kepler_gl__logo logo__link",
+                      href: branding.appWebsite,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                      style: {
+                        color: branding.appNameColor,
+                        fontFamily: "ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif",
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        letterSpacing: "1.17px",
+                        textDecoration: "none"
+                      }
+                    },
+                    react.createElement("span", {style: {color: branding.appNameColor}}, branding.appName)
+                  ),
+                  !fixed && props && props.version
+                    ? react.createElement(
+                        "div",
+                        {
+                          className: "logo__version",
+                          style: {fontSize: "10px", color: "#a0a7b4", letterSpacing: "0.83px", lineHeight: "14px"}
+                        },
+                        props.version
+                      )
+                    : null
+                )
+              );
+            };
+          }(React, branding));
+
+          /** Custom map control factory to restore export editing and chart display. **/
+          var CustomMapControlFactory = (function createCustomMapControl(react, keplerGl) {
+            var EffectControlFactory = keplerGl.EffectControlFactory;
+            var EffectManagerFactory = keplerGl.EffectManagerFactory;
+            var AnnotationControlFactory = keplerGl.AnnotationControlFactory;
+            var AnnotationManagerFactory = keplerGl.AnnotationManagerFactory;
+            var ChartControlFactory = keplerGl.ChartControlFactory;
+            var ChartManagerFactory = keplerGl.ChartManagerFactory;
+            var MapControlFactory = keplerGl.MapControlFactory;
+
+            if (
+              !EffectControlFactory ||
+              !EffectManagerFactory ||
+              !AnnotationControlFactory ||
+              !AnnotationManagerFactory ||
+              !ChartControlFactory ||
+              !ChartManagerFactory ||
+              !MapControlFactory
+            ) {
+              console.warn('kepler.gl: Export control factories not available, skipping control injection');
+              return null;
+            }
+
+            function ExportMapControlFactory(
+              EffectControl,
+              EffectManager,
+              AnnotationControl,
+              AnnotationManager,
+              ChartControl,
+              ChartManager
+            ) {
+              var args = Array.prototype.slice.call(arguments, 6);
+              var MapControl = MapControlFactory.apply(null, args);
+              var defaultActionComponents = MapControl.defaultActionComponents || [];
+
+              var ExportMapControl = function ExportMapControl(props) {
+                var readOnly = Boolean(props.readOnly);
+                var mapControls = props.mapControls || {};
+                var charts = props.charts || [];
+                var actionComponents = defaultActionComponents.filter(function(ActionComponent) {
+                  return !readOnly || ActionComponent !== AnnotationControl;
+                });
+                if (!readOnly) {
+                  actionComponents = actionComponents.concat([ChartControl, EffectControl]);
+                }
+                var showEffects = !readOnly && Boolean(mapControls.effect && mapControls.effect.active);
+                var showAnnotations = !readOnly && Boolean(mapControls.annotation && mapControls.annotation.active);
+                var showChartPanel = !readOnly && Boolean(mapControls.chart && mapControls.chart.active);
+                var hasPinnedCharts = charts.some(function(chart) { return chart.pinned !== false; });
+                var showCharts = readOnly ? charts.length > 0 : showChartPanel || hasPinnedCharts;
+                var rightPanelVisible = showEffects || showAnnotations || showCharts;
+                return react.createElement(
+                  'div',
+                  {style: {
+                    position: 'absolute',
+                    display: 'flex',
+                    top: (props.top || 0) + 'px',
+                    right: 0,
+                    zIndex: 1,
+                    maxHeight: '100%',
+                    pointerEvents: 'none'
+                  }},
+                  react.createElement(
+                    'div',
+                    {style: {position: 'relative', pointerEvents: 'all'}},
+                    react.createElement(MapControl, Object.assign({}, props, {top: 0, actionComponents: actionComponents}))
+                  ),
+                  rightPanelVisible
+                    ? react.createElement('div', {
+                        style: {
+                          maxHeight: '100%',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          pointerEvents: 'all',
+                          marginTop: '10px'
+                        }
+                      },
+                      showAnnotations ? react.createElement(AnnotationManager, null) : null,
+                      showCharts ? react.createElement(ChartManager, {
+                        panelActive: showChartPanel,
+                        isExport: readOnly
+                      }) : null,
+                      showEffects ? react.createElement(EffectManager, null) : null
+                      )
+                    : null
+                );
+              };
+
+              return ExportMapControl;
+            }
+            ExportMapControlFactory.deps = [
+              EffectControlFactory,
+              EffectManagerFactory,
+              AnnotationControlFactory,
+              AnnotationManagerFactory,
+              ChartControlFactory,
+              ChartManagerFactory
+            ].concat(MapControlFactory.deps);
+
+            return [MapControlFactory, ExportMapControlFactory];
+          }(React, KeplerGl));
+
+          var CustomPanelHeaderFactory = (function createCustomPanelHeader(react, keplerGl, BrandLogo) {
+            var PanelHeaderFactory = keplerGl.PanelHeaderFactory;
+            if (!PanelHeaderFactory) {
+              console.warn('kepler.gl: Panel header factory not available, skipping branding injection');
+              return null;
+            }
+
+            function ExportPanelHeaderFactory() {
+              var PanelHeader = PanelHeaderFactory.apply(null, arguments);
+              return function ExportPanelHeader(props) {
+                return react.createElement(
+                  PanelHeader,
+                  Object.assign({}, props, {logoComponent: BrandLogo})
+                );
+              };
+            }
+            ExportPanelHeaderFactory.deps = PanelHeaderFactory.deps;
+            return [PanelHeaderFactory, ExportPanelHeaderFactory];
+          }(React, KeplerGl, BrandLogo));
+
+          var CustomFactories = [CustomMapControlFactory, CustomPanelHeaderFactory].filter(Boolean);
+          var KeplerGlComponent = CustomFactories.length
+            ? KeplerGl.injectComponents(CustomFactories)
+            : KeplerGl.KeplerGl;
+
+          var KeplerElement = (function makeKeplerElement(react, keplerGl, mapboxToken, branding, BrandLogo) {
+            return function App() {
+              var rootElm = react.useRef(null);
+              var _useState = react.useState({
+                width: window.innerWidth,
+                height: window.innerHeight
+              });
+              var windowDimension = _useState[0];
+              var setDimension = _useState[1];
+              react.useEffect(function sideEffect(){
+                function handleResize() {
+                  setDimension({width: window.innerWidth, height: window.innerHeight});
+                };
+                window.addEventListener('resize', handleResize);
+                return function() {window.removeEventListener('resize', handleResize);};
+              }, []);
+              // Remove the loading overlay after the first render is painted.
+              // useEffect fires post-commit, so this is safe under React 19's
+              // concurrent renderer — the map is visible before the overlay goes away.
+              react.useEffect(function removeLoadScreen() {
+                var loadScreen = document.getElementById('kepler-load-screen');
+                if (loadScreen) loadScreen.remove();
+              }, []);
+              return react.createElement(
+                'div',
+                {style: {position: 'absolute', left: 0, width: '100vw', height: '100vh'}},
+                react.createElement(BrandLogo, {fixed: true}),
+                react.createElement(KeplerGlComponent, {
+                  mapboxApiAccessToken: mapboxToken,
+                  id: "map",
+                  width: windowDimension.width,
+                  height: windowDimension.height,
+                  appName: branding.appName,
+                  appWebsite: branding.appWebsite
+                })
+              )
+            }
+          }(React, KeplerGl, MAPBOX_TOKEN, branding, BrandLogo));
+
+          const app = (function createReactReduxProvider(react, reactRedux, KeplerElement) {
+            return react.createElement(
+              reactRedux.Provider,
+              {store},
+              react.createElement(KeplerElement, null)
+            )
+          }(React, ReactRedux, KeplerElement));
+          /** END COMPONENTS **/
+
+          /** Render **/
+          (function render(react, reactDOM, app) {
+            const container = document.getElementById('app');
+            const root = reactDOM.createRoot(container);
+            root.render(app);
+          }(React, ReactDOM, app));
+
+          /**
+           * Customize map.
+           * In the following section you can use the store object to dispatch Kepler.gl actions
+           * to add new data and customize behavior
+           */
+          (function customize(keplerGl, store) {
+            const datasets = [{"version":"v1","data":{"id":"3sj4x1","label":"allotjaments_turistics_cat_coords.csv","color":[0,92,255],"allData":[[41.391577,2.151,"Apartaments Turístics",8015,"Barcelona","Barcelonès","Barcelona"],[41.270001,1.962928,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.395459,2.177068,"Apartaments Turístics",8001,"Barcelona","Barcelonès","Barcelona"],[41.249687,1.792478,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.382877,2.151192,"Apartaments Turístics",8012,"Barcelona","Barcelonès","Barcelona"],[41.267746,1.974214,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.260061,1.961954,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.284995,1.975798,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.374818,2.173571,"Apartaments Turístics",8021,"Barcelona","Barcelonès","Barcelona"],[41.291377,1.95426,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.291233,1.981926,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.22761,1.795219,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.252289,1.802464,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.21771,1.792869,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.2479,1.813149,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.246285,1.818189,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.235449,1.827925,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.217141,1.727082,"Apartaments Turístics",8800,"Vilanova i la Geltrú","Garraf","Barcelona"],[41.235176,1.729741,"Apartaments Turístics",8800,"Vilanova i la Geltrú","Garraf","Barcelona"],[41.236468,1.728094,"Apartaments Turístics",8800,"Vilanova i la Geltrú","Garraf","Barcelona"],[41.737183,2.426833,"Apartaments Turístics",8472,"Campins","Vallès Oriental","Barcelona"],[41.268116,1.965576,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.277192,1.691312,"Apartaments Turístics",8799,"Olèrdola","Alt Penedès","Barcelona"],[41.26304,1.965119,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.284427,1.968593,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.273807,1.96238,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.269679,1.991466,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.349921,2.042365,"Apartaments Turístics",8830,"Sant Boi de Llobregat","Baix Llobregat","Barcelona"],[41.356846,1.944165,"Apartaments Turístics",8629,"Torrelles de Llobregat","Baix Llobregat","Barcelona"],[41.265536,1.969178,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.633581,2.6646,"Apartaments Turístics",8370,"Calella","Maresme","Barcelona"],[41.281278,1.981385,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.658714,2.75004,"Apartaments Turístics",8380,"Malgrat de Mar","Maresme","Barcelona"],[41.375162,2.151284,"Apartaments Turístics",8002,"Barcelona","Barcelonès","Barcelona"],[41.378618,2.16071,"Apartaments Turístics",8006,"Barcelona","Barcelonès","Barcelona"],[41.374439,2.187716,"Apartaments Turístics",8013,"Barcelona","Barcelonès","Barcelona"],[41.466055,2.200587,"Apartaments Turístics",8921,"Santa Coloma de Gramenet","Barcelonès","Barcelona"],[41.285218,1.969825,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.295582,1.972354,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.269595,1.963865,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.388455,2.16051,"Apartaments Turístics",8035,"Barcelona","Barcelonès","Barcelona"],[41.631383,2.695913,"Apartaments Turístics",8397,"Pineda de Mar","Maresme","Barcelona"],[41.274976,1.962773,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.610902,2.587381,"Apartaments Turístics",8360,"Canet de Mar","Maresme","Barcelona"],[41.597636,2.640885,"Apartaments Turístics",8370,"Calella","Maresme","Barcelona"],[41.344386,2.105098,"Apartaments Turístics",8901,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.492683,2.312886,"Apartaments Turístics",8320,"Masnou, el","Maresme","Barcelona"],[41.342541,2.095265,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.298845,1.975165,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.404843,2.184431,"Apartaments Turístics",8028,"Barcelona","Barcelonès","Barcelona"],[41.452459,2.094829,"Apartaments Turístics",8197,"Sant Cugat del Vallès","Vallès Occidental","Barcelona"],[41.393268,2.171479,"Apartaments Turístics",8010,"Barcelona","Barcelonès","Barcelona"],[41.376673,2.175638,"Apartaments Turístics",8026,"Barcelona","Barcelonès","Barcelona"],[41.370462,2.167391,"Apartaments Turístics",8013,"Barcelona","Barcelonès","Barcelona"],[41.277149,1.992153,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.249034,1.799536,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.388023,1.909146,"Apartaments Turístics",8757,"Corbera de Llobregat","Baix Llobregat","Barcelona"],[41.376505,2.114821,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.351938,2.105558,"Apartaments Turístics",8906,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.618359,2.645114,"Apartaments Turístics",8370,"Calella","Maresme","Barcelona"],[41.6385,2.681575,"Apartaments Turístics",8397,"Pineda de Mar","Maresme","Barcelona"],[41.986145,1.929214,"Apartaments Turístics",8672,"Puig-reig","Berguedà","Barcelona"],[41.259023,1.966966,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.430779,2.264164,"Apartaments Turístics",8912,"Badalona","Barcelonès","Barcelona"],[41.465149,2.260267,"Apartaments Turístics",8912,"Badalona","Barcelonès","Barcelona"],[41.442301,2.229317,"Apartaments Turístics",8912,"Badalona","Barcelonès","Barcelona"],[41.46512,2.264878,"Apartaments Turístics",8912,"Badalona","Barcelonès","Barcelona"],[41.522426,2.44544,"Apartaments Turístics",8301,"Mataró","Maresme","Barcelona"],[41.432769,2.257424,"Apartaments Turístics",8917,"Badalona","Barcelonès","Barcelona"],[41.460633,2.232136,"Apartaments Turístics",8916,"Badalona","Barcelonès","Barcelona"],[41.359011,2.101992,"Apartaments Turístics",8904,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.440602,2.261897,"Apartaments Turístics",8913,"Badalona","Barcelonès","Barcelona"],[41.583926,2.586472,"Apartaments Turístics",8393,"Caldes d'Estrac","Maresme","Barcelona"],[41.280572,1.983197,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.482046,2.350469,"Apartaments Turístics",8329,"Teià","Maresme","Barcelona"],[41.379806,2.105995,"Apartaments Turístics",8904,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.276524,1.974703,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.34484,2.088988,"Apartaments Turístics",8903,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.321523,1.876532,"Apartaments Turístics",8859,"Begues","Baix Llobregat","Barcelona"],[41.349205,2.088809,"Apartaments Turístics",8901,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.61084,2.685244,"Apartaments Turístics",8397,"Pineda de Mar","Maresme","Barcelona"],[41.349158,2.116217,"Apartaments Turístics",8903,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.248385,1.791834,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.34952,2.106759,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.374569,2.155292,"Apartaments Turístics",8018,"Barcelona","Barcelonès","Barcelona"],[41.251421,1.811842,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.358907,2.111385,"Apartaments Turístics",8901,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.3723,2.087616,"Apartaments Turístics",8904,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.343877,2.097242,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.275943,1.972681,"Apartaments Turístics",8860,"Castelldefels","Baix Llobregat","Barcelona"],[41.459163,2.253935,"Apartaments Turístics",8911,"Badalona","Barcelonès","Barcelona"],[41.379367,2.083937,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.446105,2.240572,"Apartaments Turístics",8911,"Badalona","Barcelonès","Barcelona"],[41.374467,2.089946,"Apartaments Turístics",8905,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.347608,2.097945,"Apartaments Turístics",8906,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.446875,2.238142,"Apartaments Turístics",8911,"Badalona","Barcelonès","Barcelona"],[41.349992,2.116931,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.231725,1.823454,"Apartaments Turístics",8870,"Sitges","Garraf","Barcelona"],[41.362013,2.082024,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.379971,2.113441,"Apartaments Turístics",8902,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.37876,2.117055,"Apartaments Turístics",8903,"Hospitalet de Llobregat, l'","Barcelonès","Barcelona"],[41.473948,1.992652,"Apartaments Turístics",8754,"Papiol, el","Baix Llobregat","Barcelona"],[41.476426,1.51655,"Apartaments Turístics",8779,"Llacuna, la","Anoia","Barcelona"],[41.830042,2.081345,"Apartaments Turístics",8178,"Collsuspina","Moianès","Barcelona"],[41.519159,1.687412,"Apartaments Turístics",8786,"Capellades","Anoia","Barcelona"],[41.956608,1.431363,"Apartaments Turístics",25283,"Lladurs","Solsonès","Lleida"],[41.9952,2.40392,"Apartaments Turístics",8511,"Tavertet","Osona","Barcelona"],[42.003293,2.305817,"Apartaments Turístics",8510,"Roda de Ter","Osona","Barcelona"],[42.026231,2.105736,"Apartaments Turístics",8589,"Perafita","Lluçanès","Barcelona"],[41.854192,2.098868,"Apartaments Turístics",8529,"Muntanyola","Osona","Barcelona"],[42.042748,2.100167,"Apartaments Turístics",8589,"Perafita","Lluçanès","Barcelona"],[41.534688,1.697919,"Apartaments Turístics",8787,"Pobla de Claramunt, la","Anoia","Barcelona"],[42.102287,1.986367,"Apartaments Turístics",8619,"Borredà","Berguedà","Barcelona"],[41.894114,1.582109,"Apartaments Turístics",25290,"Clariana de Cardener","Solsonès","Lleida"],[41.983297,2.425431,"Apartaments Turístics",8511,"Tavertet","Osona","Barcelona"],[41.980204,2.394433,"Apartaments Turístics",8511,"Tavertet","Osona","Barcelona"],[41.612801,1.848009,"Apartaments Turístics",8199,"Monistrol de Montserrat","Bages","Barcelona"],[41.988408,1.660795,"Apartaments Turístics",25286,"Navès","Solsonès","Lleida"],[42.042611,1.867849,"Apartaments Turístics",8680,"Gironella","Berguedà","Barcelona"],[41.612781,1.845775,"Apartaments Turístics",8691,"Monistrol de Montserrat","Bages","Barcelona"],[41.655769,1.874347,"Apartaments Turístics",8296,"Castellbell i el Vilar","Bages","Barcelona"],[41.728911,1.844388,"Apartaments Turístics",8241,"Manresa","Bages","Barcelona"],[41.56917,1.628648,"Apartaments Turístics",8700,"Igualada","Anoia","Barcelona"],[41.717547,1.822831,"Apartaments Turístics",8242,"Manresa","Bages","Barcelona"],[42.286868,2.141,"Apartaments Turístics",17535,"Planoles","Ripollès","Girona"],[42.217647,2.456075,"Apartaments Turístics",17813,"Vall de Bianya, la","Garrotxa","Girona"],[42.303902,2.233331,"Apartaments Turístics",17534,"Queralbs","Ripollès","Girona"],[42.194938,2.701844,"Apartaments Turístics",17850,"Sant Ferriol","Garrotxa","Girona"],[41.70593,2.921526,"Apartaments Turístics",17320,"Tossa de Mar","Selva","Girona"],[42.316608,2.93733,"Apartaments Turístics",17750,"Capmany","Alt Empordà","Girona"],[42.016235,2.565171,"Apartaments Turístics",17174,"Sant Feliu de Pallerols","Garrotxa","Girona"],[42.289781,2.07431,"Apartaments Turístics",17536,"Toses","Ripollès","Girona"],[41.71235,2.846142,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.057467,2.753489,"Apartaments Turístics",17152,"Sant Martí de Llémena","Gironès","Girona"],[41.858159,3.056313,"Apartaments Turístics",17252,"Calonge i Sant Antoni","Baix Empordà","Girona"],[42.229684,2.788975,"Apartaments Turístics",17772,"Ordis","Alt Empordà","Girona"],[42.047536,3.147557,"Apartaments Turístics",17258,"Torroella de Montgrí","Baix Empordà","Girona"],[42.137372,2.551617,"Apartaments Turístics",17811,"Santa Pau","Garrotxa","Girona"],[42.136281,2.569129,"Apartaments Turístics",17811,"Santa Pau","Garrotxa","Girona"],[42.142894,2.571193,"Apartaments Turístics",17811,"Santa Pau","Garrotxa","Girona"],[42.388704,2.298144,"Apartaments Turístics",17869,"Setcases","Ripollès","Girona"],[41.70437,2.828559,"Apartaments Turístics",17300,"Lloret de Mar","Selva","Girona"],[42.040541,3.146213,"Apartaments Turístics",17258,"Torroella de Montgrí","Baix Empordà","Girona"],[41.712844,2.821692,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.317943,2.226067,"Apartaments Turístics",17534,"Queralbs","Ripollès","Girona"],[42.113142,2.925845,"Apartaments Turístics",17468,"Vilademuls","Pla de l'Estany","Girona"],[42.406485,1.873478,"Apartaments Turístics",17538,"Alp","Cerdanya","Girona"],[41.857649,3.130067,"Apartaments Turístics",17230,"Palamós","Baix Empordà","Girona"],[42.149107,2.547387,"Apartaments Turístics",17811,"Santa Pau","Garrotxa","Girona"],[41.90401,3.178324,"Apartaments Turístics",17212,"Palafrugell","Baix Empordà","Girona"],[41.937157,3.164824,"Apartaments Turístics",17200,"Palafrugell","Baix Empordà","Girona"],[42.280384,3.1783,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[42.101924,3.124098,"Apartaments Turístics",17130,"Escala, l'","Alt Empordà","Girona"],[42.10833,3.154959,"Apartaments Turístics",17130,"Escala, l'","Alt Empordà","Girona"],[42.265845,3.091428,"Apartaments Turístics",17486,"Castelló d'Empúries","Alt Empordà","Girona"],[41.689957,2.781403,"Apartaments Turístics",17300,"Blanes","Selva","Girona"],[42.390981,1.867112,"Apartaments Turístics",17537,"Alp","Cerdanya","Girona"],[42.278205,3.190365,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[42.217255,2.716826,"Apartaments Turístics",17851,"Maià de Montcal","Garrotxa","Girona"],[41.660182,2.810195,"Apartaments Turístics",17300,"Blanes","Selva","Girona"],[42.281584,3.194048,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[42.301431,3.294257,"Apartaments Turístics",17488,"Cadaqués","Alt Empordà","Girona"],[42.132991,2.576463,"Apartaments Turístics",17811,"Santa Pau","Garrotxa","Girona"],[42.260287,3.192233,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[41.978089,3.163563,"Apartaments Turístics",17256,"Pals","Baix Empordà","Girona"],[41.97843,3.139672,"Apartaments Turístics",17256,"Pals","Baix Empordà","Girona"],[41.710495,2.822324,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.316887,2.178344,"Apartaments Turístics",17534,"Ribes de Freser","Ripollès","Girona"],[41.687897,2.850663,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[41.779412,3.020208,"Apartaments Turístics",17220,"Sant Feliu de Guíxols","Baix Empordà","Girona"],[41.792814,3.017104,"Apartaments Turístics",17220,"Sant Feliu de Guíxols","Baix Empordà","Girona"],[42.282947,2.151725,"Apartaments Turístics",17534,"Ribes de Freser","Ripollès","Girona"],[41.81213,3.081574,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.837676,3.058165,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.824659,3.062987,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.838246,3.068449,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.836569,3.051614,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.837816,3.054143,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.837501,3.057619,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[42.251336,3.172383,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[41.683142,2.785547,"Apartaments Turístics",17300,"Blanes","Selva","Girona"],[41.703248,2.838457,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.353408,2.808064,"Apartaments Turístics",17720,"Maçanet de Cabrenys","Alt Empordà","Girona"],[42.253189,2.768351,"Apartaments Turístics",17745,"Lladó","Alt Empordà","Girona"],[42.410068,1.943023,"Apartaments Turístics",17520,"Puigcerdà","Cerdanya","Girona"],[42.431538,1.934777,"Apartaments Turístics",17520,"Puigcerdà","Cerdanya","Girona"],[41.828678,3.073825,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.693569,2.820799,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[41.70557,2.831208,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[41.926557,3.009921,"Apartaments Turístics",17118,"Cruïlles, Monells i Sant Sadurní de l'Heura","Baix Empordà","Girona"],[42.27579,3.167013,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[41.691371,2.834336,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[41.695096,2.829826,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.389092,2.845818,"Apartaments Turístics",17707,"Agullana","Alt Empordà","Girona"],[41.716615,2.845093,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.331112,2.368621,"Apartaments Turístics",17867,"Camprodon","Ripollès","Girona"],[42.108038,3.140917,"Apartaments Turístics",17130,"Escala, l'","Alt Empordà","Girona"],[42.129016,2.643477,"Apartaments Turístics",17830,"Mieres","Garrotxa","Girona"],[42.346196,2.397199,"Apartaments Turístics",17868,"Molló","Ripollès","Girona"],[42.355188,2.3926,"Apartaments Turístics",17868,"Molló","Ripollès","Girona"],[41.963686,3.137548,"Apartaments Turístics",17256,"Pals","Baix Empordà","Girona"],[41.817927,3.083047,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[42.194841,2.476788,"Apartaments Turístics",17800,"Olot","Garrotxa","Girona"],[42.237392,3.077618,"Apartaments Turístics",17487,"Castelló d'Empúries","Alt Empordà","Girona"],[41.824318,3.060408,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.831737,3.077046,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[41.705912,2.826986,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[41.908965,3.143977,"Apartaments Turístics",17210,"Palafrugell","Baix Empordà","Girona"],[41.910794,3.162005,"Apartaments Turístics",17210,"Palafrugell","Baix Empordà","Girona"],[42.44299,3.145913,"Apartaments Turístics",17497,"Portbou","Alt Empordà","Girona"],[42.278578,2.899191,"Apartaments Turístics",17743,"Vilanant","Alt Empordà","Girona"],[42.308777,2.242854,"Apartaments Turístics",17534,"Queralbs","Ripollès","Girona"],[41.722775,2.922759,"Apartaments Turístics",17320,"Tossa de Mar","Selva","Girona"],[42.260242,3.057222,"Apartaments Turístics",17487,"Castelló d'Empúries","Alt Empordà","Girona"],[42.192039,3.066802,"Apartaments Turístics",17470,"Sant Pere Pescador","Alt Empordà","Girona"],[42.355263,2.990006,"Apartaments Turístics",17755,"Rabós","Alt Empordà","Girona"],[41.863035,2.538319,"Apartaments Turístics",17403,"Sant Hilari Sacalm","Selva","Girona"],[41.983718,2.805009,"Apartaments Turístics",17007,"Girona","Gironès","Girona"],[41.808968,3.080933,"Apartaments Turístics",17250,"Castell d'Aro, Platja d'Aro i s'Agaró","Baix Empordà","Girona"],[42.156258,2.537057,"Apartaments Turístics",17178,"Preses, les","Garrotxa","Girona"],[41.705703,2.857516,"Apartaments Turístics",17310,"Lloret de Mar","Selva","Girona"],[42.270818,3.193002,"Apartaments Turístics",17480,"Roses","Alt Empordà","Girona"],[42.191657,2.989506,"Apartaments Turístics",17465,"Saus, Camallera i Llampaies","Alt Empordà","Girona"],[42.086771,3.027191,"Apartaments Turístics",17142,"Verges","Baix Empordà","Girona"],[42.053223,3.031915,"Apartaments Turístics",17133,"Ultramort","Baix Empordà","Girona"],[42.012888,2.813746,"Apartaments Turístics",17199,"Sant Gregori","Gironès","Girona"],[42.114987,3.129368,"Apartaments Turístics",17130,"Escala, l'","Alt Empordà","Girona"],[41.95589,3.154506,"Apartaments Turístics",17256,"Pals","Baix Empordà","Girona"],[42.411633,1.883852,"Apartaments Turístics",17538,"Alp","Cerdanya","Girona"],[42.35407,2.384984,"Apartaments Turístics",17868,"Molló","Ripollès","Girona"],[42.166099,2.481429,"Apartaments Turístics",17811,"Olot","Garrotxa","Girona"],[42.173869,2.482788,"Apartaments Turístics",17811,"Olot","Garrotxa","Girona"],[41.849606,3.113535,"Apartaments Turístics",17230,"Palamós","Baix Empordà","Girona"],[41.71725,2.528758,"Apartaments Turístics",17400,"Breda","Selva","Girona"],[42.372257,2.992569,"Apartaments Turístics",17781,"Vilamaniscle","Alt Empordà","Girona"],[42.426304,1.927704,"Apartaments Turístics",17520,"Puigcerdà","Cerdanya","Girona"],[42.190631,2.992273,"Apartaments Turístics",17469,"Riumors","Alt Empordà","Girona"],[41.955806,3.152194,"Apartaments Turístics",17214,"Regencós","Baix Empordà","Girona"],[42.161363,2.532821,"Apartaments Turístics",17178,"Preses, les","Garrotxa","Girona"],[42.268269,3.087624,"Apartaments Turístics",17487,"Castelló d'Empúries","Alt Empordà","Girona"],[41.961215,3.129236,"Apartaments Turístics",17256,"Pals","Baix Empordà","Girona"],[42.39507,1.893139,"Apartaments Turístics",17537,"Alp","Cerdanya","Girona"],[42.131138,2.782137,"Apartaments Turístics",17820,"Banyoles","Pla de l'Estany","Girona"],[42.194761,2.709901,"Apartaments Turístics",17850,"Besalú","Garrotxa","Girona"],[42.350845,2.39813,"Apartaments Turístics",17868,"Molló","Ripollès","Girona"],[42.186822,2.688777,"Apartaments Turístics",17850,"Besalú","Garrotxa","Girona"],[42.195433,2.681161,"Apartaments Turístics",17850,"Besalú","Garrotxa","Girona"],[41.914445,3.170166,"Apartaments Turístics",17212,"Palafrugell","Baix Empordà","Girona"],[42.135173,2.464602,"Apartaments Turístics",17178,"Vall d'en Bas, la","Garrotxa","Girona"],[41.838696,2.775105,"Apartaments Turístics",17455,"Caldes de Malavella","Selva","Girona"],[42.12089,3.120079,"Apartaments Turístics",17130,"Escala, l'","Alt Empordà","Girona"],[41.916761,3.165576,"Apartaments Turístics",17211,"Palafrugell","Baix Empordà","Girona"],[42.163084,3.06171,"Apartaments Turístics",17470,"Sant Pere Pescador","Alt Empordà","Girona"],[42.102428,2.762468,"Apartaments Turístics",17820,"Banyoles","Pla de l'Estany","Girona"],[42.236011,3.072164,"Apartaments Turístics",17487,"Castelló d'Empúries","Alt Empordà","Girona"],[41.428466,1.000074,"Apartaments Turístics",25480,"Tarrés","Garrigues","Lleida"],[42.406449,0.989165,"Apartaments Turístics",25555,"Sarroca de Bellera","Pallars Jussà","Lleida"],[42.50908,0.846277,"Apartaments Turístics",25528,"Vall de Boí, la","Alta Ribagorça","Lleida"],[42.564091,1.077276,"Apartaments Turístics",25597,"Espot","Pallars Sobirà","Lleida"],[41.679775,1.306577,"Apartaments Turístics",25211,"Plans de Sió, els","Segarra","Lleida"],[42.372996,1.390998,"Apartaments Turístics",25712,"Montferrer i Castellbó","Alt Urgell","Lleida"],[42.372006,1.484249,"Apartaments Turístics",25798,"Valls de Valira, les","Alt Urgell","Lleida"],[41.83207,1.309169,"Apartaments Turístics",25752,"Biosca","Solsonès","Lleida"],[42.198984,1.281974,"Apartaments Turístics",25793,"Coll de Nargó","Alt Urgell","Lleida"],[42.346815,1.459095,"Apartaments Turístics",25798,"Valls de Valira, les","Alt Urgell","Lleida"],[42.165049,1.562778,"Apartaments Turístics",25717,"Josa i Tuixén","Alt Urgell","Lleida"],[42.649559,1.070719,"Apartaments Turístics",25587,"Alt Àneu","Pallars Sobirà","Lleida"],[42.593979,1.353676,"Apartaments Turístics",25574,"Alins","Pallars Sobirà","Lleida"],[41.686712,1.39429,"Apartaments Turístics",25213,"Sant Ramon","Segarra","Lleida"],[41.709917,1.374581,"Apartaments Turístics",25216,"Sant Ramon","Segarra","Lleida"],[41.495772,1.038589,"Apartaments Turístics",25269,"Vallbona de les Monges","Urgell","Lleida"],[42.367324,1.678027,"Apartaments Turístics",25723,"Pont de Bar, el","Alt Urgell","Lleida"],[42.364478,1.777094,"Apartaments Turístics",25720,"Bellver de Cerdanya","Cerdanya","Lleida"],[42.239327,1.505866,"Apartaments Turístics",25717,"Vansa i Fórnols, la","Alt Urgell","Lleida"],[42.594601,1.32604,"Apartaments Turístics",25575,"Alins","Pallars Sobirà","Lleida"],[42.128625,0.94109,"Apartaments Turístics",25630,"Talarn","Pallars Jussà","Lleida"],[42.579076,1.312899,"Apartaments Turístics",25570,"Vall de Cardós","Pallars Sobirà","Lleida"],[42.386012,1.774016,"Apartaments Turístics",25720,"Bellver de Cerdanya","Cerdanya","Lleida"],[42.059842,1.475354,"Apartaments Turístics",25794,"Fígols i Alinyà","Alt Urgell","Lleida"],[42.383305,1.763888,"Apartaments Turístics",25720,"Bellver de Cerdanya","Cerdanya","Lleida"],[42.165135,0.892823,"Apartaments Turístics",25620,"Tremp","Pallars Jussà","Lleida"],[41.074238,1.137649,"Apartaments Turístics",43840,"Salou","Tarragonès","Tarragona"],[41.087983,1.156893,"Apartaments Turístics",43840,"Salou","Tarragonès","Tarragona"],[41.211222,1.567432,"Apartaments Turístics",43711,"Banyeres del Penedès","Baix Penedès","Tarragona"],[41.431423,1.128148,"Apartaments Turístics",43411,"Blancafort","Conca de Barberà","Tarragona"],[41.215292,1.630419,"Apartaments Turístics",43881,"Cunit","Baix Penedès","Tarragona"],[41.116352,1.166619,"Apartaments Turístics",43481,"Vila-seca","Tarragonès","Tarragona"],[41.378803,1.105328,"Apartaments Turístics",43440,"Espluga de Francolí, l'","Conca de Barberà","Tarragona"],[41.066527,1.05934,"Apartaments Turístics",43850,"Cambrils","Baix Camp","Tarragona"],[41.071423,1.153241,"Apartaments Turístics",43840,"Salou","Tarragonès","Tarragona"],[41.055736,1.074069,"Apartaments Turístics",43850,"Cambrils","Baix Camp","Tarragona"],[41.078229,1.043467,"Apartaments Turístics",43850,"Cambrils","Baix Camp","Tarragona"],[41.212265,1.561755,"Apartaments Turístics",43820,"Calafell","Baix Penedès","Tarragona"],[41.195588,1.576413,"Apartaments Turístics",43820,"Calafell","Baix Penedès","Tarragona"],[41.06916,1.125148,"Apartaments Turístics",43840,"Salou","Tarragonès","Tarragona"],[41.082038,1.018274,"Apartaments Turístics",43000,"Mont-roig del Camp","Baix Camp","Tarragona"],[41.185485,1.583913,"Apartaments Turístics",43882,"Calafell","Baix Penedès","Tarragona"],[41.190614,1.587213,"Apartaments Turístics",43820,"Calafell","Baix Penedès","Tarragona"],[40.992047,0.832051,"Apartaments Turístics",43891,"Vandellòs i l'Hospitalet de l'Infant","Baix Camp","Tarragona"],[41.113406,1.264923,"Apartaments Turístics",43151,"Pallaresos, els","Tarragonès","Tarragona"],[41.057425,1.152803,"Apartaments Turístics",43840,"Salou","Tarragonès","Tarragona"],[41.141543,0.836327,"Apartaments Turístics",43730,"Falset","Priorat","Tarragona"],[41.100624,1.020836,"Apartaments Turístics",43340,"Montbrió del Camp","Baix Camp","Tarragona"],[41.064633,1.071717,"Apartaments Turístics",43850,"Cambrils","Baix Camp","Tarragona"],[41.357722,1.151864,"Apartaments Turístics",43400,"Montblanc","Conca de Barberà","Tarragona"],[41.385671,1.029248,"Apartaments Turístics",43448,"Vimbodí","Conca de Barberà","Tarragona"],[41.145262,0.82493,"Apartaments Turístics",43730,"Falset","Priorat","Tarragona"],[41.379237,1.03402,"Apartaments Turístics",43430,"Vimbodí","Conca de Barberà","Tarragona"],[41.074837,1.053232,"Apartaments Turístics",43850,"Cambrils","Baix Camp","Tarragona"],[41.228114,1.526837,"Apartaments Turístics",43880,"Vendrell, el","Baix Penedès","Tarragona"],[41.364056,1.147826,"Apartaments Turístics",43400,"Montblanc","Conca de Barberà","Tarragona"],[41.105703,1.229782,"Apartaments Turístics",43003,"Tarragona","Tarragonès","Tarragona"],[41.119435,1.255488,"Apartaments Turístics",43003,"Tarragona","Tarragonès","Tarragona"],[41.253406,0.781655,"Apartaments Turístics",43371,"Margalef","Priorat","Tarragona"],[41.117368,1.253983,"Apartaments Turístics",43003,"Tarragona","Tarragonès","Tarragona"],[41.168064,1.397985,"Apartaments Turístics",43830,"Torredembarra","Tarragonès","Tarragona"],[41.09832,1.132021,"Apartaments Turístics",43481,"Vila-seca","Tarragonès","Tarragona"],[41.466765,1.214099,"Apartaments Turístics",43425,"Forès","Conca de Barberà","Tarragona"],[41.052178,1.040566,"Apartaments Turístics",43850,"Cambrils","Baix Camp","Tarragona"],[40.731365,0.700972,"Apartaments Turístics",43580,"Deltebre","Baix Ebre","Tarragona"],[40.916972,0.278134,"Apartaments Turístics",43597,"Arnes","Terra Alta","Tarragona"],[40.953897,0.305051,"Apartaments Turístics",43596,"Horta de Sant Joan","Terra Alta","Tarragona"],[40.960738,0.319635,"Apartaments Turístics",43596,"Horta de Sant Joan","Terra Alta","Tarragona"],[40.960909,0.322963,"Apartaments Turístics",43596,"Horta de Sant Joan","Terra Alta","Tarragona"],[40.699776,0.253619,"Apartaments Turístics",43514,"Mas de Barberans","Montsià","Tarragona"],[41.035375,0.426055,"Apartaments Turístics",43782,"Vilalba dels Arcs","Terra Alta","Tarragona"],[40.626643,0.385109,"Apartaments Turístics",43550,"Ulldecona","Montsià","Tarragona"],[41.136885,0.276028,"Apartaments Turístics",43786,"Batea","Terra Alta","Tarragona"],[40.860963,0.725178,"Apartaments Turístics",43519,"Perelló, el","Baix Ebre","Tarragona"],[40.778144,0.619968,"Apartaments Turístics",43894,"Camarles","Baix Ebre","Tarragona"],[40.611514,0.504153,"Apartaments Turístics",43540,"Ràpita, la","Montsià","Tarragona"],[40.848757,0.682738,"Apartaments Turístics",43895,"Ampolla, l'","Baix Ebre","Tarragona"],[40.945578,0.311253,"Apartaments Turístics",43595,"Prat de Comte","Terra Alta","Tarragona"],[41.01763,0.576027,"Apartaments Turístics",43513,"Rasquera","Ribera d'Ebre","Tarragona"],[40.878903,0.809021,"Apartaments Turístics",43860,"Ametlla de Mar, l'","Baix Ebre","Tarragona"],[42.698709,0.809407,"Apartaments Turístics",25530,"Vielha e Mijaran","Aran","Lleida"],[42.712601,0.890215,"Apartaments Turístics",25598,"Naut Aran","Aran","Lleida"],[42.705841,0.799385,"Apartaments Turístics",25530,"Vielha e Mijaran","Aran","Lleida"],[42.702604,0.915904,"Apartaments Turístics",25598,"Naut Aran","Aran","Lleida"]],"fields":[{"name":"lat","type":"real","format":"","analyzerType":"FLOAT"},{"name":"lon","type":"real","format":"","analyzerType":"FLOAT"},{"name":"tipus_establiment","type":"string","format":"","analyzerType":"STRING"},{"name":"codi_postal","type":"integer","format":"","analyzerType":"INT"},{"name":"municipi","type":"string","format":"","analyzerType":"STRING"},{"name":"comarca","type":"string","format":"","analyzerType":"STRING"},{"name":"provincia","type":"string","format":"","analyzerType":"STRING"}],"type":"","metadata":{"id":"3sj4x1","format":"row","label":"allotjaments_turistics_cat_coords.csv","size":27836},"disableDataOperation":false}}];
+            const config = {"version":"v1","config":{"visState":{"filters":[],"layers":[{"id":"m0eb6ke","type":"point","config":{"dataId":"3sj4x1","columnMode":"points","label":"allotjaments_turistics_cat_coords","color":[117,222,227],"highlightColor":[252,242,26,255],"columns":{"lat":"lat","lng":"lon"},"isVisible":true,"visConfig":{"radius":21.9,"fixedRadius":false,"opacity":0.8,"outline":true,"thickness":2,"strokeColor":[225,49,106],"colorRange":{"colors":["#EE7733","#0077BB","#33BBEE","#EE3377","#CC3311","#009988"],"name":"Tol Vibrant","type":"qualitative","category":"ColorBlind"},"strokeColorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"radiusRange":[0,50],"filled":true,"billboard":false,"allowHover":false,"showNeighborOnHover":false,"showHighlightColor":true},"hidden":false,"textLabel":[]},"visualChannels":{"colorField":{"name":"tipus_establiment","type":"string"},"colorScale":"ordinal","strokeColorField":null,"strokeColorScale":"quantile","sizeField":null,"sizeScale":"linear"}}],"effects":[],"annotations":[],"interactionConfig":{"tooltip":{"fieldsToShow":{"3sj4x1":[{"name":"tipus_establiment","format":null},{"name":"codi_postal","format":null},{"name":"municipi","format":null},{"name":"comarca","format":null},{"name":"provincia","format":null}]},"timezone":null,"compareMode":false,"compareType":"absolute","enabled":false},"legend":{"hideInvisibleLayers":false,"enabled":false},"brush":{"size":2.5,"enabled":false},"geocoder":{"limitSearch":false,"color":[255,0,0],"enabled":false},"coordinate":{"enabled":false},"annotation":{"enabled":false},"zoomOpacity":{"controllers":[],"enabled":false}},"layerBlending":"normal","overlayBlending":"screen","splitMaps":[],"animationConfig":{"currentTime":null,"speed":1,"timeFormat":null,"timezone":null},"editor":{"features":[],"visible":true},"layerOrder":["m0eb6ke"],"groupBys":[],"joins":[]},"mapState":{"bearing":0,"dragRotate":false,"latitude":41.683757428889756,"longitude":1.8757703734945737,"pitch":0,"zoom":7.4608775221118595,"isSplit":false,"isViewportSynced":true,"isZoomLocked":false,"splitMapViewports":[],"maxPitch":60,"mapSplitMode":"SINGLE_MAP","swipeComparePercentage":50,"mapViewMode":"MODE_2D","globe":{"enabled":false,"config":{"atmosphere":true,"hugeHalo":true,"hugeHaloRadius":3.5,"hugeHaloOpacity":0.2,"azimuth":false,"azimuthAngle":45,"terminator":true,"terminatorOpacity":0.35,"basemap":true,"labels":false,"labelsColor":[114.75,114.75,114.75],"adminLines":true,"adminLinesColor":[40,63,93],"water":true,"waterColor":[17,35,48],"surface":true,"surfaceColor":[9,16,29],"backgroundColor":[4,9,17],"stars":true}}},"mapStyle":{"styleType":"dark","topLayerGroups":{},"visibleLayerGroups":{"label":false,"road":false,"border":true,"building":true,"water":true,"land":true,"3d building":false},"threeDBuildingColor":[9.665468314072013,17.18305478057247,31.1442867897876],"backgroundColor":[12,0,0],"mapStyles":{}},"uiState":{"mapControls":{"mapLegend":{"active":true},"chart":{"active":false},"cameraBookmarks":{"show":false,"settings":{"position":{"x":60,"y":20,"anchorX":"right","anchorY":"top"},"contentHeight":-1}},"mapInfo":{"active":true,"show":true}},"locale":"en","theme":"dark"}}};
+            const info = null;
+
+            const loadedData = keplerGl.KeplerGlSchema.load(
+              datasets,
+              config
+            );
+
+            // The 500 ms delay is a historical workaround for a race where
+            // keplerGl re-initialises and overwrites config applied synchronously.
+            // The pre-seeded styleType above removes the basemap flash on first
+            // render; this dispatch still applies the full saved config (layers,
+            // viewport, layer groups, etc.) once the component has settled.
+            window.setTimeout(() => {
+              store.dispatch(
+                keplerGl.addDataToMap({
+                  datasets: loadedData.datasets,
+                  config: loadedData.config,
+                  info,
+                  options: {
+                    centerMap: false,
+                  },
+                })
+              );
+            }, 500);
+          }(KeplerGl, store))
+        </script>
+      </body>
+    </html>
+  
